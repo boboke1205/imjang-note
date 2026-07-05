@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>임장 노트</title>
+<!--
+  ★ 카카오맵 사용법 (3단계에서 진행):
+  1. https://developers.kakao.com 에서 앱 등록 → JavaScript 키 발급
+  2. 앱 설정 > 플랫폼 > Web 에 사이트 도메인 등록 (로컬 테스트: http://localhost:포트, 배포 후: Vercel 주소)
+  3. 아래 KAKAO_APP_KEY 에 키를 붙여넣기
+  4. 이보경 테스트 오후 11:34 2026-07-03
+-->
+<script>const KAKAO_APP_KEY = "";</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; background: #f5f6f8; color: #222; }
+  header { background: #2b6cb0; color: #fff; padding: 16px 20px; }
+  header h1 { font-size: 20px; }
+  header p { font-size: 12px; opacity: .85; margin-top: 2px; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { font-size: 15px; margin-bottom: 12px; color: #2b6cb0; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+  input, textarea { width: 100%; padding: 10px; border: 1px solid #d0d5dd; border-radius: 8px; font-size: 14px; font-family: inherit; }
+  textarea { min-height: 70px; resize: vertical; }
+  .stars { display: flex; gap: 4px; font-size: 26px; cursor: pointer; user-select: none; }
+  .stars span { color: #d0d5dd; transition: color .1s; }
+  .stars span.on { color: #f6ad37; }
+  .btn { display: inline-block; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .btn-primary { background: #2b6cb0; color: #fff; width: 100%; margin-top: 14px; }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+  .btn-edit { background: #e7effa; color: #2b6cb0; }
+  .btn-del { background: #fde8e8; color: #c53030; }
+  #map { width: 100%; height: 280px; border-radius: 8px; background: #e9edf2; }
+  .map-guide { display: flex; align-items: center; justify-content: center; height: 280px; text-align: center; font-size: 13px; color: #667085; line-height: 1.7; padding: 0 20px; }
+  .note { border-top: 1px solid #eef0f3; padding: 12px 0; }
+  .note:first-of-type { border-top: 0; }
+  .note-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .note-title { font-size: 15px; font-weight: 700; }
+  .note-meta { font-size: 12px; color: #667085; margin-top: 3px; }
+  .note-stars { color: #f6ad37; font-size: 13px; }
+  .note-memo { font-size: 13px; margin-top: 6px; white-space: pre-wrap; color: #444; }
+  .actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .empty { text-align: center; color: #98a2b3; font-size: 13px; padding: 24px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏠 임장 노트</h1>
+  <p>다녀온 단지, 잊기 전에 기록하기</p>
+</header>
+<main>
+  <div class="card">
+    <h2 id="form-title">새 노트 작성</h2>
+    <form id="note-form">
+      <label>단지명 *</label>
+      <input id="f-name" required placeholder="예: 래미안 ○○ 3차">
+      <label>주소</label>
+      <input id="f-addr" placeholder="예: 서울시 ○○구 ○○동 123 (지도 표시에 사용)">
+      <label>방문일</label>
+      <input id="f-date" type="date">
+      <label>별점</label>
+      <div class="stars" id="f-stars"></div>
+      <label>메모</label>
+      <textarea id="f-memo" placeholder="채광, 소음, 주차, 관리 상태 등"></textarea>
+      <button class="btn btn-primary" type="submit" id="submit-btn">저장</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>지도</h2>
+    <div id="map"></div>
+  </div>
+
+  <div class="card">
+    <h2>내 노트 <span id="count"></span></h2>
+    <div id="list"></div>
+  </div>
+</main>
+
+<script>
+// ---------- 데이터 (localStorage) ----------
+const KEY = "imjang-notes";
+let notes = JSON.parse(localStorage.getItem(KEY) || "[]");
+let editingId = null;
+let rating = 0;
+
+const save = () => localStorage.setItem(KEY, JSON.stringify(notes));
+
+// ---------- 별점 위젯 ----------
+const starsEl = document.getElementById("f-stars");
+for (let i = 1; i <= 5; i++) {
+  const s = document.createElement("span");
+  s.textContent = "★";
+  s.onclick = () => { rating = i; drawStars(); };
+  starsEl.appendChild(s);
+}
+function drawStars() {
+  [...starsEl.children].forEach((s, i) => s.classList.toggle("on", i < rating));
+}
+
+// ---------- 목록 렌더링 ----------
+function render() {
+  const list = document.getElementById("list");
+  document.getElementById("count").textContent = notes.length ? `(${notes.length})` : "";
+  if (!notes.length) { list.innerHTML = '<div class="empty">아직 노트가 없어요. 첫 임장을 기록해보세요!</div>'; return; }
+  list.innerHTML = "";
+  notes.slice().reverse().forEach(n => {
+    const div = document.createElement("div");
+    div.className = "note";
+    div.innerHTML = `
+      <div class="note-head">
+        <div>
+          <div class="note-title">${esc(n.name)} <span class="note-stars">${"★".repeat(n.rating)}</span></div>
+          <div class="note-meta">${n.date || "날짜 미입력"}${n.addr ? " · " + esc(n.addr) : ""}</div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-sm btn-edit">수정</button>
+          <button class="btn btn-sm btn-del">삭제</button>
+        </div>
+      </div>
+      ${n.memo ? `<div class="note-memo">${esc(n.memo)}</div>` : ""}`;
+    div.querySelector(".btn-edit").onclick = () => startEdit(n.id);
+    div.querySelector(".btn-del").onclick = () => { if (confirm(`'${n.name}' 노트를 삭제할까요?`)) { notes = notes.filter(x => x.id !== n.id); save(); render(); drawMap(); } };
+    list.appendChild(div);
+  });
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- 폼 ----------
+document.getElementById("note-form").onsubmit = e => {
+  e.preventDefault();
+  const data = {
+    name: document.getElementById("f-name").value.trim(),
+    addr: document.getElementById("f-addr").value.trim(),
+    date: document.getElementById("f-date").value,
+    memo: document.getElementById("f-memo").value.trim(),
+    rating
+  };
+  if (editingId) {
+    Object.assign(notes.find(n => n.id === editingId), data);
+  } else {
+    notes.push({ id: Date.now(), ...data });
+  }
+  save(); resetForm(); render(); drawMap();
+};
+
+function startEdit(id) {
+  const n = notes.find(x => x.id === id);
+  editingId = id;
+  document.getElementById("f-name").value = n.name;
+  document.getElementById("f-addr").value = n.addr;
+  document.getElementById("f-date").value = n.date;
+  document.getElementById("f-memo").value = n.memo;
+  rating = n.rating; drawStars();
+  document.getElementById("form-title").textContent = "노트 수정";
+  document.getElementById("submit-btn").textContent = "수정 완료";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+  editingId = null; rating = 0; drawStars();
+  document.getElementById("note-form").reset();
+  document.getElementById("form-title").textContent = "새 노트 작성";
+  document.getElementById("submit-btn").textContent = "저장";
+}
+
+// ---------- 카카오맵 ----------
+let map, geocoder, markers = [];
+function initMap() {
+  if (!KAKAO_APP_KEY) {
+    document.getElementById("map").innerHTML =
+      '<div class="map-guide">🗺️ 지도를 보려면 카카오 개발자 콘솔에서 앱을 등록하고<br>JavaScript 키를 발급받아 index.html 상단의<br><b>KAKAO_APP_KEY</b>에 붙여넣으세요.<br>(README 3단계 참고)</div>';
+    return;
+  }
+  const script = document.createElement("script");
+  script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${KAKAO_APP_KEY}&libraries=services&autoload=false`;
+  script.onload = () => kakao.maps.load(() => {
+    map = new kakao.maps.Map(document.getElementById("map"), {
+      center: new kakao.maps.LatLng(37.5665, 126.9780), level: 8
+    });
+    geocoder = new kakao.maps.services.Geocoder();
+    drawMap();
+  });
+  document.head.appendChild(script);
+}
+
+function drawMap() {
+  if (!map) return;
+  markers.forEach(m => m.setMap(null));
+  markers = [];
+  const bounds = new kakao.maps.LatLngBounds();
+  let pending = notes.filter(n => n.addr).length;
+  notes.filter(n => n.addr).forEach(n => {
+    geocoder.addressSearch(n.addr, (result, status) => {
+      pending--;
+      if (status === kakao.maps.services.Status.OK) {
+        const pos = new kakao.maps.LatLng(result[0].y, result[0].x);
+        const marker = new kakao.maps.Marker({ map, position: pos });
+        const info = new kakao.maps.InfoWindow({ content: `<div style="padding:4px 8px;font-size:12px;">${esc(n.name)}</div>` });
+        kakao.maps.event.addListener(marker, "click", () => info.open(map, marker));
+        markers.push(marker);
+        bounds.extend(pos);
+      }
+      if (pending === 0 && markers.length) map.setBounds(bounds);
+    });
+  });
+}
+
+// ---------- 시작 ----------
+render();
+initMap();
+</script>
+</body>
+</html>
